@@ -2,7 +2,7 @@ _base_ = [
     '../../../../_base_/default_runtime.py',
     '../../../../_base_/datasets/coco.py'
 ]
-evaluation = dict(interval=10, metric='mAP', save_best='AP')
+evaluation = dict(interval=10, metric='mAP', save_best='AP', rle_score=True)
 
 optimizer = dict(
     type='Adam',
@@ -28,41 +28,23 @@ channel_cfg = dict(
     ])
 
 # model settings
-pretrained = ('https://github.com/SwinTransformer/storage/releases/download'
-              '/v1.0.0/swin_base_patch4_window7_224_22k.pth')
-
 model = dict(
     type='TopDown',
-    pretrained=pretrained,
-    backbone=dict(
-        type='SwinTransformer',
-        embed_dims=128,
-        depths=[2, 2, 18, 2],
-        num_heads=[4, 8, 16, 32],
-        window_size=7,
-        mlp_ratio=4,
-        qkv_bias=True,
-        qk_scale=None,
-        drop_rate=0.,
-        attn_drop_rate=0.,
-        drop_path_rate=0.3,
-        patch_norm=True,
-        out_indices=(0, 1, 2, 3),
-        with_cp=False,
-        convert_weights=True,
-    ),
+    pretrained='torchvision://resnet152',
+    backbone=dict(type='ResNet', depth=152, num_stages=4, out_indices=(3, )),
+    neck=dict(type='GlobalAveragePooling'),
     keypoint_head=dict(
-        type='TopdownHeatmapSimpleHead',
-        in_channels=1024,
-        out_channels=channel_cfg['num_output_channels'],
-        in_index=3,
-        loss_keypoint=dict(type='JointsMSELoss', use_target_weight=True)),
+        type='DeepposeRegressionHead',
+        in_channels=2048,
+        num_joints=channel_cfg['num_output_channels'],
+        loss_keypoint=dict(
+            type='RLELoss',
+            use_target_weight=True,
+            size_average=True,
+            residual=True),
+        out_sigma=True),
     train_cfg=dict(),
-    test_cfg=dict(
-        flip_test=True,
-        post_process='default',
-        shift_heatmap=True,
-        modulate_kernel=11))
+    test_cfg=dict(flip_test=True, regression_flip_shift=True))
 
 data_cfg = dict(
     image_size=[192, 256],
@@ -98,7 +80,7 @@ train_pipeline = [
         type='NormalizeTensor',
         mean=[0.485, 0.456, 0.406],
         std=[0.229, 0.224, 0.225]),
-    dict(type='TopDownGenerateTarget', sigma=2),
+    dict(type='TopDownGenerateTargetRegression'),
     dict(
         type='Collect',
         keys=['img', 'target', 'target_weight'],
@@ -130,7 +112,7 @@ test_pipeline = val_pipeline
 
 data_root = 'data/coco'
 data = dict(
-    samples_per_gpu=32,
+    samples_per_gpu=64,
     workers_per_gpu=2,
     val_dataloader=dict(samples_per_gpu=32),
     test_dataloader=dict(samples_per_gpu=32),

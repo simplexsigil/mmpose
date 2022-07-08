@@ -1,13 +1,19 @@
-_base_ = [
-    '../../../../_base_/default_runtime.py',
-    '../../../../_base_/datasets/coco.py'
-]
+_base_ = ['../../../../_base_/datasets/coco_wholebody.py']
+log_level = 'INFO'
+load_from = None
+resume_from = None
+dist_params = dict(backend='nccl')
+workflow = [('train', 1)]
+checkpoint_config = dict(interval=10)
 evaluation = dict(interval=10, metric='mAP', save_best='AP')
 
 optimizer = dict(
-    type='Adam',
+    type='AdamW',
     lr=5e-4,
+    betas=(0.9, 0.999),
+    weight_decay=0.01,
 )
+
 optimizer_config = dict(grad_clip=None)
 # learning policy
 lr_config = dict(
@@ -17,45 +23,52 @@ lr_config = dict(
     warmup_ratio=0.001,
     step=[170, 200])
 total_epochs = 210
-channel_cfg = dict(
-    num_output_channels=17,
-    dataset_joints=17,
-    dataset_channel=[
-        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
-    ],
-    inference_channel=[
-        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16
+log_config = dict(
+    interval=50,
+    hooks=[
+        dict(type='TextLoggerHook'),
+        # dict(type='TensorboardLoggerHook')
     ])
 
-# model settings
-pretrained = ('https://github.com/SwinTransformer/storage/releases/download'
-              '/v1.0.0/swin_base_patch4_window7_224_22k.pth')
+channel_cfg = dict(
+    num_output_channels=133,
+    dataset_joints=133,
+    dataset_channel=[
+        list(range(133)),
+    ],
+    inference_channel=list(range(133)))
 
+# model settings
+norm_cfg = dict(type='SyncBN', requires_grad=True)
 model = dict(
     type='TopDown',
-    pretrained=pretrained,
+    pretrained='https://download.openmmlab.com/mmpose/'
+    'pretrain_models/tcformer-4e1adbf1_20220421.pth',
     backbone=dict(
-        type='SwinTransformer',
-        embed_dims=128,
-        depths=[2, 2, 18, 2],
-        num_heads=[4, 8, 16, 32],
-        window_size=7,
-        mlp_ratio=4,
+        type='TCFormer',
+        embed_dims=[64, 128, 320, 512],
+        num_heads=[1, 2, 5, 8],
+        mlp_ratios=[8, 8, 4, 4],
         qkv_bias=True,
-        qk_scale=None,
-        drop_rate=0.,
-        attn_drop_rate=0.,
-        drop_path_rate=0.3,
-        patch_norm=True,
-        out_indices=(0, 1, 2, 3),
-        with_cp=False,
-        convert_weights=True,
+        num_layers=[3, 4, 6, 3],
+        sr_ratios=[8, 4, 2, 1],
+        drop_path_rate=0.1),
+    neck=dict(
+        type='MTA',
+        in_channels=[64, 128, 320, 512],
+        out_channels=256,
+        start_level=0,
+        num_heads=[4, 4, 4, 4],
+        mlp_ratios=[4, 4, 4, 4],
+        num_outs=4,
+        use_sr_conv=False,
     ),
     keypoint_head=dict(
         type='TopdownHeatmapSimpleHead',
-        in_channels=1024,
+        in_channels=256,
         out_channels=channel_cfg['num_output_channels'],
-        in_index=3,
+        num_deconv_layers=0,
+        extra=dict(final_conv_kernel=1, ),
         loss_keypoint=dict(type='JointsMSELoss', use_target_weight=True)),
     train_cfg=dict(),
     test_cfg=dict(
@@ -130,29 +143,29 @@ test_pipeline = val_pipeline
 
 data_root = 'data/coco'
 data = dict(
-    samples_per_gpu=32,
+    samples_per_gpu=64,
     workers_per_gpu=2,
     val_dataloader=dict(samples_per_gpu=32),
     test_dataloader=dict(samples_per_gpu=32),
     train=dict(
-        type='TopDownCocoDataset',
-        ann_file=f'{data_root}/annotations/person_keypoints_train2017.json',
+        type='TopDownCocoWholeBodyDataset',
+        ann_file=f'{data_root}/annotations/coco_wholebody_train_v1.0.json',
         img_prefix=f'{data_root}/train2017/',
         data_cfg=data_cfg,
         pipeline=train_pipeline,
         dataset_info={{_base_.dataset_info}}),
     val=dict(
-        type='TopDownCocoDataset',
-        ann_file=f'{data_root}/annotations/person_keypoints_val2017.json',
+        type='TopDownCocoWholeBodyDataset',
+        ann_file=f'{data_root}/annotations/coco_wholebody_val_v1.0.json',
         img_prefix=f'{data_root}/val2017/',
         data_cfg=data_cfg,
         pipeline=val_pipeline,
         dataset_info={{_base_.dataset_info}}),
     test=dict(
-        type='TopDownCocoDataset',
-        ann_file=f'{data_root}/annotations/person_keypoints_val2017.json',
+        type='TopDownCocoWholeBodyDataset',
+        ann_file=f'{data_root}/annotations/coco_wholebody_val_v1.0.json',
         img_prefix=f'{data_root}/val2017/',
         data_cfg=data_cfg,
-        pipeline=test_pipeline,
+        pipeline=val_pipeline,
         dataset_info={{_base_.dataset_info}}),
 )
