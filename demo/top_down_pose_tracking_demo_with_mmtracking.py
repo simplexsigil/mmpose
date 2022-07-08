@@ -5,6 +5,9 @@ from argparse import ArgumentParser
 
 import cv2
 import mmcv as mmcv
+import json
+from json import JSONEncoder
+import numpy
 
 from mmpose.apis import (collect_multi_frames, inference_top_down_pose_model,
                          init_pose_model, vis_pose_tracking_result)
@@ -40,6 +43,12 @@ def process_mmtracking_results(mmtracking_results):
         person_results.append(person)
     return person_results
 
+class NumpyArrayEncoder(JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, numpy.ndarray):
+            return obj.tolist()
+        return JSONEncoder.default(self, obj)
+
 
 def main():
     """Visualize the demo images.
@@ -57,10 +66,15 @@ def main():
         default=False,
         help='whether to show visualizations.')
     parser.add_argument(
-        '--out-video-root',
+        '--out-video',
         default='',
-        help='Root of the output video file. '
+        help='The output video file. '
         'Default not saving the visualization video.')
+    parser.add_argument(
+        '--out-json',
+        default='',
+        help='Output json file. '
+        'Default not saving the json file.')
     parser.add_argument(
         '--device', default='cuda:0', help='Device used for inference')
     parser.add_argument(
@@ -73,7 +87,7 @@ def main():
     parser.add_argument(
         '--radius',
         type=int,
-        default=4,
+        default=2,
         help='Keypoint radius for visualization')
     parser.add_argument(
         '--thickness',
@@ -110,7 +124,7 @@ def main():
 
     args = parser.parse_args()
 
-    assert args.show or (args.out_video_root != '')
+    assert args.show or (args.out_video != '') or args.out_json
     assert args.tracking_config is not None
 
     print('Initializing model...')
@@ -132,22 +146,25 @@ def main():
 
     # read video
     video = mmcv.VideoReader(args.video_path)
-    assert video.opened, f'Faild to load video file {args.video_path}'
+    assert video.opened, f'Failed to load video file {args.video_path}'
 
-    if args.out_video_root == '':
+    if args.out_video == '':
         save_out_video = False
     else:
-        os.makedirs(args.out_video_root, exist_ok=True)
+        assert args.out_video.endswith(".mp4"), "Out video file name has to end with .mp4"
+        os.makedirs(os.path.dirname(args.out_video), exist_ok=True)
         save_out_video = True
+
+    if args.out_json != '':
+        assert args.out_json.endswith(".json"), "Out json file name has to end with .json"
+        os.makedirs(os.path.dirname(args.out_json), exist_ok=True)
+        json_results = {}
 
     if save_out_video:
         fps = video.fps
         size = (video.width, video.height)
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        videoWriter = cv2.VideoWriter(
-            os.path.join(args.out_video_root,
-                         f'vis_{os.path.basename(args.video_path)}'), fourcc,
-            fps, size)
+        videoWriter = cv2.VideoWriter(args.out_video, fourcc, fps, size)
 
     # frame index offsets for inference, used in multi-frame inference setting
     if args.use_multi_frames:
@@ -195,31 +212,38 @@ def main():
         if smoother:
             pose_results = smoother.smooth(pose_results)
 
+        if args.out_json != '':
+            json_results[frame_id] = pose_results
+
         # show the results
-        vis_frame = vis_pose_tracking_result(
-            pose_model,
-            cur_frame,
-            pose_results,
-            radius=args.radius,
-            thickness=args.thickness,
-            dataset=dataset,
-            dataset_info=dataset_info,
-            kpt_score_thr=args.kpt_thr,
-            show=False)
+        if args.show or save_out_video:
+            vis_frame = vis_pose_tracking_result(
+                pose_model,
+                cur_frame,
+                pose_results,
+                radius=args.radius,
+                thickness=args.thickness,
+                dataset=dataset,
+                dataset_info=dataset_info,
+                kpt_score_thr=args.kpt_thr,
+                show=False)
 
-        if args.show:
-            cv2.imshow('Frame', vis_frame)
+            if args.show:
+                cv2.imshow('Frame', vis_frame)
 
-        if save_out_video:
-            videoWriter.write(vis_frame)
+            if save_out_video:
+                videoWriter.write(vis_frame)
 
-        if args.show and cv2.waitKey(1) & 0xFF == ord('q'):
-            break
+            if args.show and cv2.waitKey(1) & 0xFF == ord('q'):
+                break
 
     if save_out_video:
         videoWriter.release()
     if args.show:
         cv2.destroyAllWindows()
+    if args.out_json:
+        with open(args.out_json, 'w', encoding='utf-8') as f:
+            json.dump(json_results, f, indent=2, sort_keys=True, cls=NumpyArrayEncoder)
 
 
 if __name__ == '__main__':
